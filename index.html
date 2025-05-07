@@ -235,8 +235,12 @@
                     
                     if (data.status === 'success') {
                         this.summaryData.buckets = data.votes;
-                        this.summaryData.mean = data.summary_results.mean;
-                        this.summaryData.median = data.summary_results.median;
+                        
+                        if (data.summary_results && data.summary_results.length > 0) {
+                            this.summaryData.mean = data.summary_results[0].mean;
+                            this.summaryData.median = data.summary_results[0].median;
+                        }
+                        
                         this.summaryData.total = data.votes.reduce((sum, bucket) => sum + bucket.n, 0);
                     } else {
                         throw new Error(data.message || 'Failed to load summary data');
