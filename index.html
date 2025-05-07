@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ACCC Votes Admin</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #333;
+            border-bottom: 2px solid #eee;
+            padding-bottom: 10px;
+        }
+        .summary-box {
+            background-color: #f5f5f5;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .summary-stat {
+            display: inline-block;
+            margin-right: 20px;
+            font-weight: bold;
+        }
+        .bucket-container {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+        .bucket {
+            flex: 1;
+            margin: 0 5px;
+            padding: 10px;
+            background-color: #e0f7fa;
+            border-radius: 5px;
+            text-align: center;
+        }
+        .bucket-count {
+            font-size: 24px;
+            font-weight: bold;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+        }
+        th, td {
+            padding: 8px 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        tr:hover {
+            background-color: #f5f5f5;
+        }
+        .delete-btn {
+            background-color: #ff5252;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .delete-btn:hover {
+            background-color: #ff1744;
+        }
+        .error {
+            color: #d32f2f;
+            background-color: #ffebee;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+            display: none;
+        }
+        .success {
+            color: #388e3c;
+            background-color: #e8f5e9;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+            display: none;
+        }
+        .loading {
+            margin: 20px 0;
+            text-align: center;
+            display: none;
+        }
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3498db;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .auth-status {
+            float: right;
+            padding: 5px 10px;
+            border-radius: 3px;
+            margin-top: 10px;
+            cursor: pointer;
+        }
+        .auth-status.authenticated {
+            background-color: #e8f5e9;
+            color: #388e3c;
+        }
+        .auth-status.not-authenticated {
+            background-color: #ffebee;
+            color: #d32f2f;
+        }
+        .refresh-btn {
+            background-color: #2196f3;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-bottom: 15px;
+        }
+        .refresh-btn:hover {
+            background-color: #0b7dda;
+        }
+    </style>
+</head>
+<body>
+    <div id="auth-status" class="auth-status not-authenticated">Not Authenticated</div>
+    <h1>ACCC Votes Admin</h1>
+    
+    <div id="error-message" class="error"></div>
+    <div id="success-message" class="success"></div>
+    
+    <div id="loading" class="loading">
+        <div class="spinner"></div>
+        <p>Loading data...</p>
+    </div>
+    
+    <button id="refresh-btn" class="refresh-btn">Refresh Data</button>
+    
+    <h2>Summary Statistics</h2>
+    <div class="summary-box">
+        <div class="summary-stat">Mean Vote: <span id="mean-vote">-</span></div>
+        <div class="summary-stat">Median Vote: <span id="median-vote">-</span></div>
+        <div class="summary-stat">Total Votes: <span id="total-votes">-</span></div>
+    </div>
+    
+    <h2>Vote Distribution</h2>
+    <div id="bucket-container" class="bucket-container">
+        <!-- Buckets will be populated by JavaScript -->
+    </div>
+    
+    <h2>Individual Votes</h2>
+    <table id="votes-table">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Vote</th>
+                <th>Timestamp</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody id="votes-body">
+            <!-- Votes will be populated by JavaScript -->
+        </tbody>
+    </table>
+    
+    <script>
+        // Configuration
+        const API_BASE_URL = 'https://cardioid.co.nz/api';
+        
+        // Votes Manager State object
+        const VotesManager = {
+            votes: [],
+            summaryData: {
+                buckets: [],
+                mean: 0,
+                median: 0,
+                total: 0
+            },
+            isAuthenticated: false,
+            
+            // Authentication methods
+            getAuthCode() {
+                return localStorage.getItem('accc_votes_auth_code') || '';
+            },
+            
+            setAuthCode(code) {
+                localStorage.setItem('accc_votes_auth_code', code);
+            },
+            
+            clearAuthCode() {
+                localStorage.removeItem('accc_votes_auth_code');
+                this.isAuthenticated = false;
+                updateAuthStatusUI();
+            },
+            
+            // API methods
+            async authenticate() {
+                const authCode = this.getAuthCode();
+                if (!authCode) {
+                    return false;
+                }
+                
+                try {
+                    const response = await fetch(`${API_BASE_URL}/admin/votes?auth_code=${authCode}`);
+                    const data = await response.json();
+                    
+                    this.isAuthenticated = (data.status === 'success');
+                    return this.isAuthenticated;
+                } catch (error) {
+                    console.error('Authentication error:', error);
+                    this.isAuthenticated = false;
+                    return false;
+                }
+            },
+            
+            async loadSummaryData() {
+                try {
+                    const response = await fetch(`${API_BASE_URL}/get_votes`);
+                    const data = await response.json();
+                    
+                    if (data.status === 'success') {
+                        this.summaryData.buckets = data.votes;
+                        this.summaryData.mean = data.summary_results.mean;
+                        this.summaryData.median = data.summary_results.median;
+                        this.summaryData.total = data.votes.reduce((sum, bucket) => sum + bucket.n, 0);
+                    } else {
+                        throw new Error(data.message || 'Failed to load summary data');
+                    }
+                    
+                    return data;
+                } catch (error) {
+                    console.error('Error loading summary data:', error);
+                    throw error;
+                }
+            },
+            
+            async loadVotes() {
+                const authCode = this.getAuthCode();
+                if (!authCode) {
+                    return false;
+                }
+                
+                try {
+                    const response = await fetch(`${API_BASE_URL}/admin/votes?auth_code=${authCode}`);
+                    const data = await response.json();
+                    
+                    if (data.status === 'success') {
+                        this.votes = data.votes;
+                        return true;
+                    } else {
+                        throw new Error(data.message || 'Failed to load votes');
+                    }
+                } catch (error) {
+                    console.error('Error loading votes:', error);
+                    throw error;
+                }
+            },
+            
+            async deleteVote(id) {
+                const authCode = this.getAuthCode();
+                if (!authCode) {
+                    return { status: 'error', message: 'Authentication required' };
+                }
+                
+                try {
+                    const response = await fetch(`${API_BASE_URL}/admin/votes?id=${id}&auth_code=${authCode}`, {
+                        method: 'DELETE'
+                    });
+                    const data = await response.json();
+                    
+                    if (data.status === 'success') {
+                        // Remove the vote from our local array
+                        this.votes = this.votes.filter(vote => vote.id !== id);
+                    }
+                    
+                    return data;
+                } catch (error) {
+                    console.error('Error deleting vote:', error);
+                    throw error;
+                }
+            },
+            
+            // UI interaction methods
+            async promptForAuth() {
+                const code = prompt('Please enter the authentication code:');
+                if (code) {
+                    this.setAuthCode(code);
+                    return await this.authenticate();
+                }
+                return false;
+            },
+            
+            async refreshData() {
+                if (!this.isAuthenticated && !await this.authenticate()) {
+                    if (!await this.promptForAuth()) {
+                        return false;
+                    }
+                }
+                
+                showLoading();
+                
+                try {
+                    await Promise.all([
+                        this.loadSummaryData(),
+                        this.loadVotes()
+                    ]);
+                    
+                    updateUI();
+                    return true;
+                } catch (error) {
+                    showError(error.message);
+                    return false;
+                } finally {
+                    hideLoading();
+                }
+            }
+        };
+        
+        // DOM elements
+        const errorMessage = document.getElementById('error-message');
+        const successMessage = document.getElementById('success-message');
+        const loading = document.getElementById('loading');
+        const meanVote = document.getElementById('mean-vote');
+        const medianVote = document.getElementById('median-vote');
+        const totalVotes = document.getElementById('total-votes');
+        const bucketContainer = document.getElementById('bucket-container');
+        const votesBody = document.getElementById('votes-body');
+        const refreshBtn = document.getElementById('refresh-btn');
+        const authStatus = document.getElementById('auth-status');
+        
+        // Initialize the page
+        document.addEventListener('DOMContentLoaded', async () => {
+            // Set up auth status click event
+            authStatus.addEventListener('click', handleAuthStatusClick);
+            
+            // Check if we have an auth code already
+            if (VotesManager.getAuthCode()) {
+                await VotesManager.authenticate();
+            }
+            
+            updateAuthStatusUI();
+            
+            // Load data if authenticated, otherwise prompt
+            if (VotesManager.isAuthenticated) {
+                VotesManager.refreshData();
+            } else {
+                const success = await VotesManager.promptForAuth();
+                if (success) {
+                    VotesManager.refreshData();
+                }
+            }
+            
+            // Set up refresh button
+            refreshBtn.addEventListener('click', () => {
+                VotesManager.refreshData();
+            });
+        });
+        
+        // UI Helper Functions
+        function updateUI() {
+            updateSummaryUI();
+            updateVotesTableUI();
+            updateAuthStatusUI();
+        }
+        
+        function updateSummaryUI() {
+            // Update summary stats
+            meanVote.textContent = VotesManager.summaryData.mean.toFixed(2);
+            medianVote.textContent = VotesManager.summaryData.median.toFixed(2);
+            totalVotes.textContent = VotesManager.summaryData.total;
+            
+            // Update buckets
+            bucketContainer.innerHTML = '';
+            VotesManager.summaryData.buckets.forEach(bucket => {
+                const bucketElem = document.createElement('div');
+                bucketElem.className = 'bucket';
+                bucketElem.innerHTML = `
+                    <div class="bucket-count">${bucket.n}</div>
+                    <div class="bucket-label">${bucket.bucket}</div>
+                `;
+                bucketContainer.appendChild(bucketElem);
+            });
+        }
+        
+        function updateVotesTableUI() {
+            votesBody.innerHTML = '';
+            
+            if (VotesManager.votes.length === 0) {
+                votesBody.innerHTML = `<tr><td colspan="4">No votes found</td></tr>`;
+                return;
+            }
+            
+            VotesManager.votes.forEach(vote => {
+                const row = document.createElement('tr');
+                
+                // Format the timestamp
+                let timestamp = vote.timestamp;
+                try {
+                    const date = new Date(vote.timestamp);
+                    timestamp = date.toLocaleString();
+                } catch (e) {
+                    // Keep original timestamp if parsing fails
+                }
+                
+                row.innerHTML = `
+                    <td>${vote.id}</td>
+                    <td>${vote.vote}</td>
+                    <td>${timestamp}</td>
+                    <td>
+                        <button class="delete-btn" data-id="${vote.id}">Delete</button>
+                    </td>
+                `;
+                votesBody.appendChild(row);
+            });
+            
+            // Add event listeners to delete buttons
+            document.querySelectorAll('.delete-btn').forEach(btn => {
+                btn.addEventListener('click', async (e) => {
+                    const id = parseInt(e.target.getAttribute('data-id'));
+                    if (confirm(`Are you sure you want to delete vote #${id}?`)) {
+                        try {
+                            showLoading();
+                            const result = await VotesManager.deleteVote(id);
+                            hideLoading();
+                            
+                            if (result.status === 'success') {
+                                showSuccess(result.message);
+                                updateVotesTableUI();
+                                VotesManager.loadSummaryData().then(updateSummaryUI);
+                            } else {
+                                showError(result.message);
+                            }
+                        } catch (error) {
+                            hideLoading();
+                            showError(`Failed to delete vote: ${error.message}`);
+                        }
+                    }
+                });
+            });
+        }
+        
+        function updateAuthStatusUI() {
+            if (VotesManager.isAuthenticated) {
+                authStatus.textContent = 'Authenticated';
+                authStatus.className = 'auth-status authenticated';
+                authStatus.title = 'Click to log out';
+            } else {
+                authStatus.textContent = 'Not Authenticated';
+                authStatus.className = 'auth-status not-authenticated';
+                authStatus.title = 'Click to authenticate';
+            }
+        }
+        
+        async function handleAuthStatusClick() {
+            if (VotesManager.isAuthenticated) {
+                // Log out
+                if (confirm('Do you want to log out?')) {
+                    VotesManager.clearAuthCode();
+                }
+            } else {
+                // Log in
+                const success = await VotesManager.promptForAuth();
+                if (success) {
+                    updateAuthStatusUI();
+                    VotesManager.refreshData();
+                }
+            }
+        }
+        
+        function showLoading() {
+            loading.style.display = 'block';
+        }
+        
+        function hideLoading() {
+            loading.style.display = 'none';
+        }
+        
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorMessage.style.display = 'block';
+            setTimeout(() => {
+                errorMessage.style.display = 'none';
+            }, 5000);
+        }
+        
+        function showSuccess(message) {
+            successMessage.textContent = message;
+            successMessage.style.display = 'block';
+            setTimeout(() => {
+                successMessage.style.display = 'none';
+            }, 5000);
+        }
+    </script>
+</body>
+</html>
